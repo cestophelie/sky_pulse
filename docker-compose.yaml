@@ -1,0 +1,256 @@
+version: "3.9"
+
+x-airflow-common:
+  &airflow-common
+  image: apache/airflow:2.6.2
+  environment:
+    &airflow-common-env
+    AIRFLOW__CORE__EXECUTOR: CeleryExecutor
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
+    AIRFLOW__CORE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
+    AIRFLOW__CELERY__RESULT_BACKEND: db+postgresql://airflow:airflow@postgres/airflow
+    AIRFLOW__CELERY__BROKER_URL: redis://:@redis:6379/0
+    AIRFLOW__CORE__FERNET_KEY: ''
+    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
+    AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+    AIRFLOW__API__AUTH_BACKENDS: 'airflow.api.auth.backend.basic_auth,airflow.api.auth.backend.session'
+    AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: 'true'
+    _PIP_ADDITIONAL_REQUIREMENTS: 'apache-airflow-providers-postgres'
+  volumes:
+    - ./dags:/opt/airflow/dags
+    - ./logs:/opt/airflow/logs
+    - ./config:/opt/airflow/config
+    - ./plugins:/opt/airflow/plugins
+  user: "50000:0"
+  depends_on:
+    &airflow-common-depends-on
+    redis:
+      condition: service_healthy
+    postgres:
+      condition: service_healthy
+
+services:
+  spark:
+    image: docker.io/bitnami/spark:3.4
+    container_name: spark-master
+    volumes:
+      - .:/opt/bitnami/spark/work
+      - ./spark_conf/log4j2.properties:/opt/bitnami/spark/conf/log4j2.properties
+      - ./spark_conf/spark-defaults.conf:/opt/bitnami/spark/conf/spark-defaults.conf
+      - ./spark-events:/tmp/spark-events
+    environment:
+      - SPARK_MODE=master
+      - SPARK_USER=spark
+    user: "root"
+    ports:
+      - "8080:8080"
+      - "18080:18080"
+      - "4040:4040"
+    networks:
+      - bigdata_net
+
+  spark-worker:
+    image: docker.io/bitnami/spark:3.4
+    container_name: spark-worker
+    volumes:
+      - .:/opt/bitnami/spark/work
+    environment:
+      - SPARK_MODE=worker
+      - SPARK_MASTER_URL=spark://spark:7077
+      - SPARK_WORKER_MEMORY=1G
+      - SPARK_WORKER_CORES=1
+      - SPARK_USER=spark
+    user: "root"
+    networks:
+      - bigdata_net
+
+  pyspark:
+    image: jupyter/pyspark-notebook:spark-3.5.0
+    container_name: pyspark-notebook
+    user: "root"
+    environment:
+      - NB_GID=100
+      - GRANT_SUDO=yes
+    volumes:
+      - .:/home/jovyan/work
+    ports:
+      - "8888:8888"
+    networks:
+      - bigdata_net
+    command: start-notebook.sh --NotebookApp.token='' --NotebookApp.password=''
+
+  kafka:
+    image: bitnami/kafka:3.4
+    container_name: kafka
+    volumes:
+      - ./kafka-persistence:/bitnami/kafka
+    environment:
+      - KAFKA_CFG_NODE_ID=0
+      - KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE=true
+      - KAFKA_CFG_PROCESS_ROLES=controller,broker
+      - KAFKA_CFG_LISTENERS=PLAINTEXT://:9092,CONTROLLER://:9093,EXTERNAL://:9094
+      - KAFKA_CFG_ADVERTISED_LISTENERS=PLAINTEXT://kafka:9092,EXTERNAL://localhost:9094
+      - KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP=CONTROLLER:PLAINTEXT,EXTERNAL:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      - KAFKA_CFG_CONTROLLER_QUORUM_VOTERS=0@kafka:9093
+      - KAFKA_CFG_CONTROLLER_LISTENER_NAMES=CONTROLLER
+    ports:
+      - "9092:9092"
+      - "9094:9094"
+    networks:
+      - bigdata_net
+
+  cassandra:
+    image: bitnami/cassandra:4.0.11
+    container_name: cassandra
+    volumes:
+      - ./cassandra-persistence:/bitnami
+    environment:
+      - CASSANDRA_TRANSPORT_PORT_NUMBER=7000
+    ports:
+      - "9042:9042"
+    networks:
+      - bigdata_net
+
+  postgres:
+    image: postgres:13
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+    volumes:
+      - postgres-db-volume:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "airflow"]
+      interval: 10s
+      retries: 5
+      start_period: 5s
+    restart: always
+    ports:
+      - "5433:5432"
+    networks:
+      - bigdata_net
+
+  redis:
+    image: redis:latest
+    expose:
+      - 6379
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 30s
+      retries: 50
+      start_period: 30s
+    restart: always
+    networks:
+      - bigdata_net
+
+  airflow-webserver:
+    <<: *airflow-common
+    command: webserver
+    ports:
+      - "8088:8080"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: always
+    networks:
+      - bigdata_net
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+
+  airflow-scheduler:
+    <<: *airflow-common
+    command: scheduler
+    restart: always
+    networks:
+      - bigdata_net
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+
+  airflow-init:
+    <<: *airflow-common
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - |
+        airflow db init && \
+        airflow users create -r Admin -u airflow -p airflow -f Air -l Flow -e airflow@example.com
+      #- airflow db init && airflow users create -r Admin -u airflow -p airflow -f Air -l Flow -e airflow@example.com
+    environment:
+      <<: *airflow-common-env
+      _AIRFLOW_DB_UPGRADE: 'true'
+      _AIRFLOW_WWW_USER_CREATE: 'true'
+      _AIRFLOW_WWW_USER_USERNAME: airflow
+      _AIRFLOW_WWW_USER_PASSWORD: airflow
+    # user: "0:0"
+    # volumes:
+    # - .:/sources
+    networks:
+      - bigdata_net
+
+  rest:
+    image: tabulario/iceberg-rest
+    container_name: iceberg-rest
+    environment:
+      - AWS_ACCESS_KEY_ID=admin
+      - AWS_SECRET_ACCESS_KEY=password
+      - AWS_REGION=us-east-1
+      - CATALOG_WAREHOUSE=s3://warehouse/
+      - CATALOG_IO__IMPL=org.apache.iceberg.aws.s3.S3FileIO
+      - CATALOG_S3_ENDPOINT=http://minio:9000
+    ports:
+      - "8181:8181"
+    depends_on:
+      - minio
+    networks:
+      - bigdata_net
+
+  minio:
+    image: minio/minio
+    container_name: minio
+    environment:
+      - MINIO_ROOT_USER=admin
+      - MINIO_ROOT_PASSWORD=password
+      - MINIO_DOMAIN=minio
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    command: ["server", "/data", "--console-address", ":9001"]
+    networks:
+      bigdata_net:
+        aliases:
+          - warehouse.minio
+
+  mc:
+    image: minio/mc
+    container_name: mc
+    depends_on:
+      - minio
+    environment:
+      - AWS_ACCESS_KEY_ID=admin
+      - AWS_SECRET_ACCESS_KEY=password
+      - AWS_REGION=us-east-1
+    entrypoint: >
+      /bin/sh -c "
+      until (/usr/bin/mc alias set minio http://minio:9000 admin password) do echo '...waiting...' && sleep 1; done;
+      /usr/bin/mc rm -r --force minio/warehouse;
+      /usr/bin/mc mb minio/warehouse;
+      /usr/bin/mc policy set public minio/warehouse;
+      tail -f /dev/null
+      "
+    networks:
+      - bigdata_net
+
+volumes:
+  postgres-db-volume:
+
+networks:
+  bigdata_net:
+    driver: bridge
