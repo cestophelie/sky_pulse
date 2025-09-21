@@ -1,71 +1,68 @@
 version: "3.9"
 
-x-airflow-common:
-  &airflow-common
-  image: apache/airflow:2.6.2
-  environment:
-    &airflow-common-env
-    AIRFLOW__CORE__EXECUTOR: CeleryExecutor
-    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
-    AIRFLOW__CORE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
-    AIRFLOW__CELERY__RESULT_BACKEND: db+postgresql://airflow:airflow@postgres/airflow
-    AIRFLOW__CELERY__BROKER_URL: redis://:@redis:6379/0
-    AIRFLOW__CORE__FERNET_KEY: ''
-    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
-    AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
-    AIRFLOW__API__AUTH_BACKENDS: 'airflow.api.auth.backend.basic_auth,airflow.api.auth.backend.session'
-    AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: 'true'
-    _PIP_ADDITIONAL_REQUIREMENTS: 'apache-airflow-providers-postgres'
-  volumes:
-    - ./dags:/opt/airflow/dags
-    - ./logs:/opt/airflow/logs
-    - ./config:/opt/airflow/config
-    - ./plugins:/opt/airflow/plugins
-  user: "50000:0"
-  depends_on:
-    &airflow-common-depends-on
-    redis:
-      condition: service_healthy
-    postgres:
-      condition: service_healthy
-
 services:
-  spark:
-    image: docker.io/bitnami/spark:3.4
+  spark-master:
+    build:
+      context: ./spark
+      dockerfile: Dockerfile
     container_name: spark-master
+    # command: ["/opt/spark/sbin/start-master.sh", "--foreground"]
+    # command: ["/opt/spark/sbin/start-master.sh", "--host", "0.0.0.0"]
+    command: ["/opt/spark/bin/spark-class", "org.apache.spark.deploy.master.Master", "--host", "0.0.0.0"]
     volumes:
-      - .:/opt/bitnami/spark/work
-      - ./spark_conf/log4j2.properties:/opt/bitnami/spark/conf/log4j2.properties
-      - ./spark_conf/spark-defaults.conf:/opt/bitnami/spark/conf/spark-defaults.conf
-      - ./spark-events:/tmp/spark-events
-    environment:
-      - SPARK_MODE=master
-      - SPARK_USER=spark
-    user: "root"
+      - ./spark:/opt/scripts 
+      #- ./jars:/opt/spark/jars
+      #- ./spark_conf/spark-defaults.conf:/opt/spark/conf/spark-defaults.conf
     ports:
+      - "7077:7077"
       - "8080:8080"
-      - "18080:18080"
-      - "4040:4040"
     networks:
-      - bigdata_net
+      - spark_net
 
   spark-worker:
-    image: docker.io/bitnami/spark:3.4
+    build:
+      context: ./spark
+      dockerfile: Dockerfile
     container_name: spark-worker
+    # command: ["/opt/spark/sbin/start-worker.sh", "spark://spark-master:7077"]
+    command: ["/opt/spark/bin/spark-class", "org.apache.spark.deploy.worker.Worker", "--host", "0.0.0.0", "spark://spark-master:7077"]
     volumes:
-      - .:/opt/bitnami/spark/work
-    environment:
-      - SPARK_MODE=worker
-      - SPARK_MASTER_URL=spark://spark:7077
-      - SPARK_WORKER_MEMORY=1G
-      - SPARK_WORKER_CORES=1
-      - SPARK_USER=spark
-    user: "root"
+      - ./scripts:/opt/scripts # kafka cp 하기 위해 추가
+      #- ./jars:/opt/spark/jars
+      #- ./spark_conf/spark-defaults.conf:/opt/spark/conf/spark-defaults.conf
+    depends_on:
+      - spark-master
+    ports:
+      - "8081:8081"
     networks:
-      - bigdata_net
+      - spark_net
+  
+  airflow-init:
+    image: apache/airflow:2.6.2
+    container_name: airflow-init
+    entrypoint: /bin/bash
+    command: -c "
+      airflow db init &&
+      airflow users create \
+        --username airflow \
+        --password airflow \
+        --firstname admin \
+        --lastname user \
+        --role Admin \
+        --email admin@example.com
+      "
+    environment:
+      - AIRFLOW__CORE__FERNET_KEY=4XvY8cOq0A9qGp-6V9r9uJAVDPDTgb_26RhiJ9c9zkQ=
+      - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://airflow:airflow@airflow-postgres:5432/airflow
+    depends_on:
+      - airflow-postgres
+    networks:
+      - spark_net
 
   pyspark:
-    image: jupyter/pyspark-notebook:spark-3.5.0
+    build:
+      context: ./pyspark
+      dockerfile: Dockerfile
     container_name: pyspark-notebook
     user: "root"
     environment:
@@ -75,30 +72,132 @@ services:
       - .:/home/jovyan/work
     ports:
       - "8888:8888"
+      - "4042:4040"
     networks:
-      - bigdata_net
+      - spark_net
     command: start-notebook.sh --NotebookApp.token='' --NotebookApp.password=''
+
+  
+  airflow-webserver:
+    image: apache/airflow:2.6.2
+    command: webserver
+    container_name: airflow-webserver
+    restart: always
+    depends_on:
+      - airflow-scheduler
+      - airflow-postgres
+      - airflow-redis
+    environment:
+      - AIRFLOW__CORE__EXECUTOR=CeleryExecutor
+      - AIRFLOW__CORE__FERNET_KEY=4XvY8cOq0A9qGp-6V9r9uJAVDPDTgb_26RhiJ9c9zkQ=
+      - AIRFLOW__CORE__SQL_ALCHEMY_CONN=postgresql+psycopg2://airflow:airflow@airflow-postgres:5432/airflow
+      - AIRFLOW__CELERY__RESULT_BACKEND=db+postgresql://airflow:airflow@airflow-postgres:5432/airflow
+      - AIRFLOW__CELERY__BROKER_URL=redis://airflow-redis:6379/0
+      - AIRFLOW__WEBSERVER__ENABLE_PROXY_FIX=True
+      - AIRFLOW_UID=50000
+    ports:
+      - "8082:8080"
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - ./airflow/logs:/opt/airflow/logs
+      - ./airflow/plugins:/opt/airflow/plugins
+    networks:
+      - spark_net
+
+  airflow-scheduler:
+    image: apache/airflow:2.6.2
+    command: scheduler
+    container_name: airflow-scheduler
+    restart: always
+    depends_on:
+      - airflow-postgres
+      - airflow-redis
+    environment:
+      - AIRFLOW__CORE__EXECUTOR=CeleryExecutor
+      - AIRFLOW__CORE__FERNET_KEY=4XvY8cOq0A9qGp-6V9r9uJAVDPDTgb_26RhiJ9c9zkQ=
+      - AIRFLOW__CORE__SQL_ALCHEMY_CONN=postgresql+psycopg2://airflow:airflow@airflow-postgres:5432/airflow
+      - AIRFLOW__CELERY__RESULT_BACKEND=db+postgresql://airflow:airflow@airflow-postgres:5432/airflow
+      - AIRFLOW__CELERY__BROKER_URL=redis://airflow-redis:6379/0
+      - AIRFLOW_UID=50000
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - ./airflow/logs:/opt/airflow/logs
+      - ./airflow/plugins:/opt/airflow/plugins
+    networks:
+      - spark_net
+
+  airflow-postgres:
+    image: postgres:15
+    container_name: airflow-postgres
+    restart: always
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+    volumes:
+      - airflow-postgres-db:/var/lib/postgresql/data
+    networks:
+      - spark_net
+
+  airflow-redis:
+    image: redis:7
+    container_name: airflow-redis
+    restart: always
+    networks:
+      - spark_net
+    
+  airflow-worker:
+    image: apache/airflow:2.6.2
+    command: celery worker
+    container_name: airflow-worker
+    restart: always
+    depends_on:
+      - airflow-postgres
+      - airflow-redis
+    environment:
+      - AIRFLOW__CORE__EXECUTOR=CeleryExecutor
+      - AIRFLOW__CORE__FERNET_KEY=4XvY8cOq0A9qGp-6V9r9uJAVDPDTgb_26RhiJ9c9zkQ=
+      - AIRFLOW__CORE__SQL_ALCHEMY_CONN=postgresql+psycopg2://airflow:airflow@airflow-postgres:5432/airflow
+      - AIRFLOW__CELERY__RESULT_BACKEND=db+postgresql://airflow:airflow@airflow-postgres:5432/airflow
+      - AIRFLOW__CELERY__BROKER_URL=redis://airflow-redis:6379/0
+      - AIRFLOW_UID=50000
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - ./airflow/logs:/opt/airflow/logs
+      - ./airflow/plugins:/opt/airflow/plugins
+    networks:
+      - spark_net
 
   kafka:
     image: bitnami/kafka:3.4
     container_name: kafka
+    # Kafka 데이터를 로컬에 유지하도록 볼륨 연결
     volumes:
       - ./kafka-persistence:/bitnami/kafka
+      - ./scripts:/opt/scripts
     environment:
-      - KAFKA_CFG_NODE_ID=0
-      - KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE=true
-      - KAFKA_CFG_PROCESS_ROLES=controller,broker
-      - KAFKA_CFG_LISTENERS=PLAINTEXT://:9092,CONTROLLER://:9093,EXTERNAL://:9094
-      - KAFKA_CFG_ADVERTISED_LISTENERS=PLAINTEXT://kafka:9092,EXTERNAL://localhost:9094
-      - KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP=CONTROLLER:PLAINTEXT,EXTERNAL:PLAINTEXT,PLAINTEXT:PLAINTEXT
-      - KAFKA_CFG_CONTROLLER_QUORUM_VOTERS=0@kafka:9093
+      # KRaft 모드에서 노드 식별용 ID
+      - KAFKA_CFG_NODE_ID=1
+      # Kafka 역할: broker와 controller를 동시에 수행
+      - KAFKA_CFG_PROCESS_ROLES=broker,controller
+      # 브로커와 컨트롤러 리스너 설정
+      - KAFKA_CFG_LISTENERS=PLAINTEXT://:9092,CONTROLLER://:9093
+      # 클라이언트에게 알려줄 브로커 주소 (컨트롤러 제외), plain text는 나중에 ssl 등으로 바꿔야함
+      - KAFKA_CFG_ADVERTISED_LISTENERS=PLAINTEXT://kafka:9092
+      - KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP=PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT
+      # KRaft 컨트롤러 관련 설정
+      - KAFKA_CFG_CONTROLLER_QUORUM_VOTERS=1@kafka:9093
       - KAFKA_CFG_CONTROLLER_LISTENER_NAMES=CONTROLLER
+      # 편의 설정
+      - KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE=true
+      - ALLOW_PLAINTEXT_LISTENER=yes
+    # 브로커 클라이언트 포트와 내부 컨트롤러 포트
     ports:
-      - "9092:9092"
-      - "9094:9094"
+      - "9092:9092"  # Kafka 클라이언트 접속용
+      - "9093:9093"  # KRaft 컨트롤러 내부 통신용
     networks:
-      - bigdata_net
-
+      - spark_net
+      
   cassandra:
     image: bitnami/cassandra:4.0.11
     container_name: cassandra
@@ -109,91 +208,7 @@ services:
     ports:
       - "9042:9042"
     networks:
-      - bigdata_net
-
-  postgres:
-    image: postgres:13
-    environment:
-      POSTGRES_USER: airflow
-      POSTGRES_PASSWORD: airflow
-      POSTGRES_DB: airflow
-    volumes:
-      - postgres-db-volume:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD", "pg_isready", "-U", "airflow"]
-      interval: 10s
-      retries: 5
-      start_period: 5s
-    restart: always
-    ports:
-      - "5433:5432"
-    networks:
-      - bigdata_net
-
-  redis:
-    image: redis:latest
-    expose:
-      - 6379
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 30s
-      retries: 50
-      start_period: 30s
-    restart: always
-    networks:
-      - bigdata_net
-
-  airflow-webserver:
-    <<: *airflow-common
-    command: webserver
-    ports:
-      - "8088:8080"
-    healthcheck:
-      test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 30s
-    restart: always
-    networks:
-      - bigdata_net
-    depends_on:
-      <<: *airflow-common-depends-on
-      airflow-init:
-        condition: service_completed_successfully
-
-  airflow-scheduler:
-    <<: *airflow-common
-    command: scheduler
-    restart: always
-    networks:
-      - bigdata_net
-    depends_on:
-      <<: *airflow-common-depends-on
-      airflow-init:
-        condition: service_completed_successfully
-
-  airflow-init:
-    <<: *airflow-common
-    entrypoint: /bin/bash
-    command:
-      - -c
-      - |
-        airflow db init && \
-        airflow users create -r Admin -u airflow -p airflow -f Air -l Flow -e airflow@example.com
-      #- airflow db init && airflow users create -r Admin -u airflow -p airflow -f Air -l Flow -e airflow@example.com
-    environment:
-      <<: *airflow-common-env
-      _AIRFLOW_DB_UPGRADE: 'true'
-      _AIRFLOW_WWW_USER_CREATE: 'true'
-      _AIRFLOW_WWW_USER_USERNAME: airflow
-      _AIRFLOW_WWW_USER_PASSWORD: airflow
-    # user: "0:0"
-    # volumes:
-    # - .:/sources
-    networks:
-      - bigdata_net
+      - spark_net
 
   rest:
     image: tabulario/iceberg-rest
@@ -210,7 +225,7 @@ services:
     depends_on:
       - minio
     networks:
-      - bigdata_net
+      - spark_net
 
   minio:
     image: minio/minio
@@ -224,9 +239,11 @@ services:
       - "9001:9001"
     command: ["server", "/data", "--console-address", ":9001"]
     networks:
-      bigdata_net:
+      spark_net:
         aliases:
           - warehouse.minio
+    volumes:
+      - ./minio-data:/data
 
   mc:
     image: minio/mc
@@ -240,17 +257,25 @@ services:
     entrypoint: >
       /bin/sh -c "
       until (/usr/bin/mc alias set minio http://minio:9000 admin password) do echo '...waiting...' && sleep 1; done;
-      /usr/bin/mc rm -r --force minio/warehouse;
       /usr/bin/mc mb minio/warehouse;
       /usr/bin/mc policy set public minio/warehouse;
       tail -f /dev/null
       "
     networks:
-      - bigdata_net
+      - spark_net
+
+  kafka-cli:
+    image: confluentinc/cp-kafka:latest
+    container_name: kafka-cli
+    depends_on:
+      - kafka
+    entrypoint: ["sleep", "infinity"]
+    networks:
+      - spark_net
 
 volumes:
-  postgres-db-volume:
+  airflow-postgres-db:
 
 networks:
-  bigdata_net:
+  spark_net:
     driver: bridge
