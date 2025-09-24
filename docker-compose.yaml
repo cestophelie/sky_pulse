@@ -13,6 +13,8 @@ services:
       - ./spark:/opt/scripts 
       #- ./jars:/opt/spark/jars
       #- ./spark_conf/spark-defaults.conf:/opt/spark/conf/spark-defaults.conf
+      - ./spark_conf/spark-defaults.conf:/opt/spark/conf/spark-defaults.conf
+
     ports:
       - "7077:7077"
       - "8080:8080"
@@ -30,6 +32,8 @@ services:
       - ./scripts:/opt/scripts # kafka cp 하기 위해 추가
       #- ./jars:/opt/spark/jars
       #- ./spark_conf/spark-defaults.conf:/opt/spark/conf/spark-defaults.conf
+      - ./spark_conf/spark-defaults.conf:/opt/spark/conf/spark-defaults.conf
+
     depends_on:
       - spark-master
     ports:
