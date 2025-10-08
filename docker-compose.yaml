@@ -13,7 +13,7 @@ services:
       - ./spark:/opt/scripts 
       #- ./jars:/opt/spark/jars
       #- ./spark_conf/spark-defaults.conf:/opt/spark/conf/spark-defaults.conf
-      - ./spark_conf/spark-defaults.conf:/opt/spark/conf/spark-defaults.conf
+      - ./spark/spark-defaults.conf:/opt/spark/conf/spark-defaults.conf
 
     ports:
       - "7077:7077"
@@ -32,7 +32,7 @@ services:
       - ./scripts:/opt/scripts # kafka cp 하기 위해 추가
       #- ./jars:/opt/spark/jars
       #- ./spark_conf/spark-defaults.conf:/opt/spark/conf/spark-defaults.conf
-      - ./spark_conf/spark-defaults.conf:/opt/spark/conf/spark-defaults.conf
+      - ./spark/spark-defaults.conf:/opt/spark/conf/spark-defaults.conf
 
     depends_on:
       - spark-master
@@ -72,6 +72,12 @@ services:
     environment:
       - NB_GID=100
       - GRANT_SUDO=yes
+        # Spark 환경 변수 추가
+      - SPARK_HOME=/opt/spark
+      - PATH=/opt/spark/bin:/opt/spark/sbin:$PATH
+      - PYSPARK_PYTHON=python3
+      - PYSPARK_DRIVER_PYTHON=jupyter
+      - PYSPARK_DRIVER_PYTHON_OPTS=lab
     volumes:
       - .:/home/jovyan/work
     ports:
@@ -79,7 +85,7 @@ services:
       - "4042:4040"
     networks:
       - spark_net
-    command: start-notebook.sh --NotebookApp.token='' --NotebookApp.password=''
+    command: start-notebook.sh --NotebookApp.token='' --NotebookApp.password='' --ip=0.0.0.0
 
   
   airflow-webserver:
