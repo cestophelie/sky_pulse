@@ -5,19 +5,32 @@ ENV HADOOP_VERSION=3
 ENV SPARK_HOME=/opt/spark
 ENV PATH=$SPARK_HOME/bin:$SPARK_HOME/sbin:$PATH
 
-# 필요한 패키지 설치
-RUN apt-get update && apt-get install -y curl procps dos2unix && apt-get clean
-
-# Python 설치
+# 필요한 패키지 설치 및 Python 설치
 RUN apt-get update && \
-    apt-get install -y python3 python3-pip && \
+    apt-get install -y curl procps dos2unix python3 python3-pip tini && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
+# RUN apt-get update && apt-get install -y curl procps dos2unix && apt-get clean
+# Python 설치
+# RUN apt-get update && \
+#    apt-get install -y python3 python3-pip && \
+#     apt-get clean && rm -rf /var/lib/apt/lists/*
+
 
 # kafka-python 설치. python과 kafka가 통신하기 위한 라이브러리
 RUN pip3 install --no-cache-dir kafka-python
 
 # 로컬에서 다운로드해 놓은 Spark 바이너리 복사
 COPY spark-3.4.4-bin-hadoop3 /opt/spark
+
+# 로컬 spark_conf의 spark-defaults.conf를 컨테이너로 복사
+COPY spark-defaults.conf /opt/spark/conf/spark-defaults.conf
+
+# 기존 template 파일 삭제
+RUN rm -f /opt/spark/conf/spark-defaults.conf.template
+
+# spark-events 디렉토리 생성
+# Dockerfile에 추가
+RUN mkdir -p /tmp/spark-events && chmod 777 /tmp/spark-events
 
 # Iceberg + Kafka + Hadoop AWS JAR 추가 (2025.09.15 추가) 
 ENV ICEBERG_VERSION=1.9.2
@@ -43,4 +56,6 @@ ENV PYSPARK_DRIVER_PYTHON=python3
 
 WORKDIR /opt/spark
 
+# tini를 entrypoint로 지정
+ENTRYPOINT ["/usr/bin/tini", "--"]
 CMD ["/bin/bash"]
