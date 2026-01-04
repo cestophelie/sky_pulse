@@ -90,6 +90,88 @@ button = wait.until(
 )
 button.click()
 
+cards = driver.find_elements(
+    By.XPATH,
+    "//li[contains(@class, 'pIav2d')]"
+)
+
+results = []
+
+for card in cards:
+    try:
+        price_span = card.find_element(
+            By.XPATH,
+            ".//span[@aria-label and contains(@aria-label,'원')]"
+        )
+        # price = price_div.text # aria-label의 443400 대한민국 원이 \443,400원으로 js 렌더링 되는데 시차가 있음
+        price = int(price_span.get_attribute("aria-label").split()[0])
+
+        # airport info
+        airports = card.find_elements(
+            By.XPATH,
+            ".//span[@dir='ltr']"
+        )
+
+        dep = airports[0].text.strip("()")
+        arr = airports[1].text.strip("()")
+
+        # ---
+        wait = WebDriverWait(driver, 10)
+
+        divs = driver.find_elements(
+            By.CSS_SELECTOR,
+            "div.MX5RWe.sSHqwe.y52p7d"
+        )
+
+        results2 = []
+
+        for div in divs:
+            spans = div.find_elements(By.XPATH, ".//span")
+            texts = [s.text.strip() for s in spans if s.text.strip()]
+            results2.append(texts)
+
+        results.append({
+            "from": dep,
+            "to": arr,
+            "price": price,
+            "airline" : results2[0][0],
+            "airplane" : results2[0][2],
+            "flight_no" : results2[0][3]
+        })
+
+    except Exception:
+        # print("------cards parsing exception------")
+        continue
+
+print(results)
+
+
+'''
+# price extraction first
+spans = wait.until(
+    EC.presence_of_all_elements_located((
+        By.XPATH,
+        "//span[@role='text' and contains(@aria-label, '원')]"
+    ))
+)
+
+prices = []
+for span in spans:
+    label = span.get_attribute("aria-label")  # 예: "443400 대한민국 원"
+    price = int(label.split()[0])
+    prices.append(price)
+
+print(prices)
+
+# button 상세정보 안의 데이터 추출
+button = wait.until(
+    EC.element_to_be_clickable((
+        By.XPATH,
+        "//button[contains(@aria-label, '항공편 세부정보')]"
+    ))
+)
+button.click()
+
 # plane info collection
 wait = WebDriverWait(driver, 10)
 
@@ -106,6 +188,9 @@ for div in divs:
     results.append(texts)
 
 print(results)
+
+button.click()
+'''
 print("------ending here-------")
 time.sleep(5)
 
@@ -113,6 +198,7 @@ time.sleep(5)
 
 # page deux
 # 2.1 항공편 더보기 펼친다
+'''
 xpaths = [
     "//*[contains(text(),'더보기')]",
     "//span[contains(@class,'bEfgkb')]",
@@ -138,12 +224,6 @@ time.sleep(10)
 flights = []
 label_text = ""
 
-'''
-elements = driver.find_elements(
-    By.XPATH,
-    '//div[contains(@aria-label, "최저가")]'
-)'''
-
 elements = WebDriverWait(driver, 10).until(
     EC.presence_of_all_elements_located(
         (By.XPATH, '//div[contains(@aria-label,"최저가")]')
@@ -162,7 +242,7 @@ print("\n\n\n\n\n")
 for i in flights:
     print(i)
 # print(flights)
-
+'''
 
 # termination
 driver.quit()
