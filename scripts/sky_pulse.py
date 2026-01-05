@@ -82,20 +82,55 @@ driver.execute_script("arguments[0].click();", btn)
 time.sleep(5) # time needed for the page to load
 
 print("------starting here-------")
-button = wait.until(
-    EC.element_to_be_clickable((
+
+'''buttons = wait.until(
+    EC.presence_of_all_elements_located((
         By.XPATH,
         "//button[contains(@aria-label, '항공편 세부정보')]"
     ))
-)
-button.click()
-
+)'''
 cards = driver.find_elements(
     By.XPATH,
     "//li[contains(@class, 'pIav2d')]"
 )
 
 results = []
+elem_count = 0
+cards_len = len(cards)
+
+wait = WebDriverWait(driver, 15)
+xpath = "//button[contains(@aria-label,'항공편 세부정보')]"
+
+for i in range(cards_len):
+    buttons = wait.until(
+        EC.presence_of_all_elements_located((By.XPATH, xpath))
+    )
+    # 아직 안 열린 버튼만
+    unopened = [
+        b for b in buttons
+        if b.get_attribute("aria-expanded") == "false"
+    ]
+
+    if not unopened:
+        break
+
+    btn = unopened[0]
+
+    # 클릭 (JS)
+    driver.execute_script("arguments[0].click();", btn)
+
+    wait.until(
+        lambda d: btn.get_attribute("aria-expanded") == "true"
+    )
+
+print("exited")
+
+# DOM has changed -> initiate the variable
+cards = driver.find_elements(
+    By.XPATH,
+    "//li[contains(@class, 'pIav2d')]"
+)
+print(len(cards))
 
 for card in cards:
     try:
@@ -138,9 +173,11 @@ for card in cards:
             "airplane" : results2[0][2],
             "flight_no" : results2[0][3]
         })
+        print("now in try")
 
     except Exception:
         # print("------cards parsing exception------")
+        print("now in except")
         continue
 
 print(results)
