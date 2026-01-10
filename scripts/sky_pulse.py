@@ -151,9 +151,9 @@ for card in cards:
         arr = airports[1].text.strip("()")
 
         # ---
-        wait = WebDriverWait(driver, 10)
+        # wait = WebDriverWait(driver, 3)
 
-        divs = driver.find_elements(
+        divs = card.find_elements(
             By.CSS_SELECTOR,
             "div.MX5RWe.sSHqwe.y52p7d"
         )
@@ -180,8 +180,9 @@ for card in cards:
         print("now in except")
         continue
 
-print(results)
-
+# print(results)
+for i, item in enumerate(results, start=1):
+    print(f"{i}.{item}")
 
 '''
 # price extraction first
