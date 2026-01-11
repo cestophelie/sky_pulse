@@ -128,7 +128,7 @@ print("exited")
 # DOM has changed -> initiate the variable
 cards = driver.find_elements(
     By.XPATH,
-    "//li[contains(@class, 'pIav2d')]"
+    "//li[contains(@class, 'pIav2d')]" # 출발 날짜부터 모두 포함된 최상위 항공 정보 단위
 )
 print(len(cards))
 
@@ -141,38 +141,32 @@ for card in cards:
         # price = price_div.text # aria-label의 443400 대한민국 원이 \443,400원으로 js 렌더링 되는데 시차가 있음
         price = int(price_span.get_attribute("aria-label").split()[0])
 
-        # airport info
-        airports = card.find_elements(
-            By.XPATH,
-            ".//span[@dir='ltr']"
-        )
-
-        dep = airports[0].text.strip("()")
-        arr = airports[1].text.strip("()")
-
-        # ---
-        # wait = WebDriverWait(driver, 3)
-
-        divs = card.find_elements(
+        airport_spans = card.find_elements(By.XPATH, ".//span[@dir='ltr']")
+        trips = card.find_elements(
             By.CSS_SELECTOR,
             "div.MX5RWe.sSHqwe.y52p7d"
         )
 
         results2 = []
 
-        for div in divs:
-            spans = div.find_elements(By.XPATH, ".//span")
-            texts = [s.text.strip() for s in spans if s.text.strip()]
-            results2.append(texts)
+        for i, trip in enumerate(trips):
+            # 공항 2개씩 매칭
+            dep = airport_spans[i * 2].text.strip("()")
+            arr = airport_spans[i * 2 + 1].text.strip("()")
 
-        results.append({
-            "from": dep,
-            "to": arr,
-            "price": price,
-            "airline" : results2[0][0],
-            "airplane" : results2[0][2],
-            "flight_no" : results2[0][3]
-        })
+            spans = trip.find_elements(By.XPATH, ".//span")
+            texts = [s.text.strip() for s in spans if s.text.strip()]
+
+            # texts 예: [항공사, 기종, 편명]
+            results.append({
+                "from": dep,
+                "to": arr,
+                "price": price,
+                "airline": texts[0],
+                "airplane": texts[1],
+                "flight_no": texts[2]
+            })
+
         print("now in try")
 
     except Exception:
