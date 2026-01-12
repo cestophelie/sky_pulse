@@ -125,6 +125,8 @@ for i in range(cards_len):
 
 print("exited")
 
+results2 = []
+
 # DOM has changed -> initiate the variable
 cards = driver.find_elements(
     By.XPATH,
@@ -140,25 +142,35 @@ for card in cards:
         )
         # price = price_div.text # aria-label의 443400 대한민국 원이 \443,400원으로 js 렌더링 되는데 시차가 있음
         price = int(price_span.get_attribute("aria-label").split()[0])
+        airport_divs = card.find_elements(By.CSS_SELECTOR, "div.AdWm1c.y52p7d.QS0io")
 
-        airport_spans = card.find_elements(By.XPATH, ".//span[@dir='ltr']")
+        airport_texts = []
+        for div in airport_divs:
+            code = div.find_element(By.XPATH, ".//span[@dir='ltr']").text
+            airport_texts.append(code.strip("()"))
+        print("here codes : ", airport_texts)
+
         trips = card.find_elements(
             By.CSS_SELECTOR,
             "div.MX5RWe.sSHqwe.y52p7d"
         )
 
-        results2 = []
+        # results2 = []
 
         for i, trip in enumerate(trips):
-            # 공항 2개씩 매칭
-            dep = airport_spans[i * 2].text.strip("()")
-            arr = airport_spans[i * 2 + 1].text.strip("()")
+            if len(airport_texts) < (i * 2 + 2):
+                continue
+
+            dep = airport_texts[i * 2]
+            arr = airport_texts[i * 2 + 1]
 
             spans = trip.find_elements(By.XPATH, ".//span")
             texts = [s.text.strip() for s in spans if s.text.strip()]
 
-            # texts 예: [항공사, 기종, 편명]
-            results.append({
+            if len(texts) < 3:
+                continue
+
+            results2.append({
                 "from": dep,
                 "to": arr,
                 "price": price,
@@ -174,8 +186,7 @@ for card in cards:
         print("now in except")
         continue
 
-# print(results)
-for i, item in enumerate(results, start=1):
+for i, item in enumerate(results2, start=1):
     print(f"{i}.{item}")
 
 '''
